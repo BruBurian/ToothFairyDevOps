@@ -1,0 +1,100 @@
+trigger:
+  branches:
+    include:
+    - main
+    - master
+    - minharelease
+pool:
+  vmImage: 'ubuntu-latest'
+variables:
+- name: rm
+  value: rm9999
+- name: location
+  value: brazilsouth
+- name: resourceGroup
+  value: Toothfairy
+- name: service-plan
+  value: planToothfairy
+- name: app-name
+  value: Tooth-Fairy-$(rm)
+- name: runtime
+  value: JAVA:21-java21
+- name: sku
+  value: F1
+- name: nome-artefato
+  value: Toothfairy
+stages:
+- stage: criarInfra
+  jobs:
+  - job: criaWebApp
+    displayName: 'Criar o serviço de Aplicativo'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'ToothFairy'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          #!/bin/bash
+
+          # Verificar se o grupo de Recursos existe
+          az group show --name $(resourceGroup)
+
+          # Verificar se o Plano de Serviço já existe
+          if az appservice plan show -g $(resourceGroup) -n $(service-plan) &> /dev/null; then
+            echo "Plano de Serviço $(service-plan) já existe"
+          else
+            # Criar o Plano de serviço com SO igual a Linux
+            az appservice plan create -g $(resourceGroup) -n $(service-plan) --is-linux --location $(location) --sku $(sku)
+          fi
+
+          # Verificar se o Serviço de Aplicativo já existe
+          if az webapp show -g $(resourceGroup) -n $(app-name) &> /dev/null; then
+            echo "Serviço de Aplicativo $(app-name) já existe"
+          else
+            # Criar um Serviço de Aplicativo com JAVA 17 SE como runtime
+            az webapp create -g $(resourceGroup) -p $(service-plan) -n $(app-name) --runtime "$(runtime)"
+          fi
+        visibleAzLogin: false
+- stage: BuildApp
+  variables:
+  - name: mavenPOMFile
+    value: 'Java_Odontoprev_v2/pom.xml'
+  jobs:
+  - job: buildWebApp
+    displayName: 'Realizar o build do app'
+    steps:
+    - task: Maven@4
+      displayName: 'Build ToothFairy'
+      inputs:
+        mavenPomFile: '$(mavenPOMFile)'
+        testRunTitle: 'Testes Unitários'
+        jdkVersionOption: 1.21
+    - task: CmdLine@2
+      displayName: 'Listar arquivos gerados no target'
+      inputs:
+        script: ls -l $(system.defaultworkingdirectory)/Java_Odontoprev_v2/target/
+    - task: CopyFiles@2
+      displayName: 'Copiar a aplicação ToothFairy'
+      inputs:
+        SourceFolder: '$(system.defaultworkingdirectory)/Java_Odontoprev_v2/target'
+        Contents: '*.jar'
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: CmdLine@2
+      displayName: 'Listar arquivos na pasta de artefatos'
+      inputs:
+        script: ls -l $(build.artifactstagingdirectory)
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publicar artefato do Build ToothFairy'
+      inputs:
+        PathtoPublish: '$(build.artifactstagingdirectory)'
+        ArtifactName: ToothFairy
+      condition: succeededOrFailed()
+    - task: AzureWebApp@1
+      displayName: 'Deploy do JAR para Azure Web App'
+      inputs:
+        azureSubscription: 'ToothFairy'
+        appType: 'webAppLinux'
+        appName: '$(app-name)'
+        package: '$(build.artifactstagingdirectory)/*.jar'
+
